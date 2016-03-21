@@ -92,6 +92,17 @@ chroot_cmd()
     chroot ${CHROOT} ${CHROOT_ENV} -c "$*"
 }
 
+netns_chroot_cmd()
+{
+    argcheck CHROOT
+
+    local ns_name=$1 ; shift
+
+    einfos "network namespace: ${ns_name}"
+    einfos $@
+    ip netns exec ${ns_name} chroot ${CHROOT} ${CHROOT_ENV} -c "$*"
+}
+
 # Send a signal to processes inside _this_ CHROOT (designated by ${CHROOT})
 # that match the given regex.  [note: regex support is identical to pgrep]
 #

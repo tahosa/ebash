@@ -265,7 +265,7 @@ daemon_start()
                         done
                     fi
 
-                    $netns_cmd_prefix chroot_cmd ${cmdline} || true
+                    netns_chroot_cmd ${netns_name} ${cmdline} || true
                 else
                     $netns_cmd_prefix ${cmdline} || true
                 fi

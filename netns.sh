@@ -8,12 +8,19 @@ NETNS_DIR="/run/netns"
 #-------------------------------------------------------------------------------
 # Idempotent create a network namespace
 #
+# -c : "Create or die!!!" (not idempotent)
+#
 netns_create()
 {
     $(declare_args ns_name)
 
     # Do not create if it already exists
-    [[ -e "${NETNS_DIR}/${ns_name}" ]] && return 0
+    if [[ -e "${NETNS_DIR}/${ns_name}" ]] ; then
+        if opt_true "c" ; then
+            die "ERROR: namespace already exists (${ns_name})"
+        fi
+        return 0
+    fi
 
     ip netns add "${ns_name}"
     netns_exec "${ns_name}" ip link set dev lo up
@@ -73,6 +80,7 @@ netns_exists()
 #        devname        : veth pair's external dev name
 #        peer_devname   : veth pair's internal dev name
 #        connected_nic  : nic that can talk to the internet
+#        bridge_basename: the name of the bridge, can be reused
 #        bridge_cidr    : cidr for the bridge (ex: 1.2.3.4/24)
 #        nic_cidr       : cidr for the internal nic (peer_devname)
 #
@@ -86,8 +94,10 @@ netns_init()
         devname=                                \
         peer_devname=                           \
         connected_nic=                          \
+        bridge_basename=                        \
         bridge_cidr=                            \
         nic_cidr=                               \
+        peer_cidr=                              \
         "${@}"
 
     return 0
@@ -104,7 +114,13 @@ netns_check_pack()
     $(declare_args netns_args_packname)
 
     local key
-    for key in ns_name devname peer_devname connected_nic bridge_cidr nic_cidr ; do
+
+    local needed_keys="ns_name devname peer_devname nic_cidr"
+
+    if opt_true "c" ; then
+        needed_keys+=" connected_nic bridge_basename bridge_cidr"
+    fi
+    for key in ${needed_keys} ; do
         if ! pack_contains ${netns_args_packname} ${key} ; then
             die "ERROR: netns_args key missing (${key})"
         fi
@@ -116,7 +132,9 @@ netns_check_pack()
         die "ERROR: namespace name too long (Max: 12 chars)"
     fi
 
-    # a cidr is an ip address with the number of static (or network) bits 
+    opt_false "c" && return 0
+
+    # a cidr is an ip address with the number of static (or network) bits
     # added to the end.  It is typically of the form "A.B.C.D/##".  the "ip"
     # utility uses cidr addresses rather than netmasks, as they serve the same
     # purpose.  This regex ensures that the address is a cidr address.
@@ -164,7 +182,7 @@ netns_setup_connected_network()
 {
     $(declare_args netns_args_packname)
 
-    netns_check_pack ${netns_args_packname}
+    netns_check_pack -c ${netns_args_packname}
 
     $(pack_import ${netns_args_packname})
 
@@ -184,24 +202,34 @@ netns_setup_connected_network()
     fi
 
     # We create all the virtual things we need.  A veth pair, a tap adapter
-    # and a virtual bridge
+    # and a virtual bridge if needed
     ip link add dev ${devname} type veth peer name ${devname}p
     ip link set dev ${devname} up
-    ip tuntap add ${ns_name}_t mode tap
-    ip link set dev ${ns_name}_t up
-    ip link add ${ns_name}_br type bridge
+    if [[ ! -L /sys/class/net/${bridge_basename}_br ]] ; then
+#        ip tuntap add ${bridge_basename}_t mode tap
+#        ip link set dev ${bridge_basename}_t up
+        ip link add ${bridge_basename}_br type bridge
 
-    # put the tap adapter in the bridge
-    ip link set ${ns_name}_t master ${ns_name}_br
+        # put the tap adapter in the bridge
+#        ip link set ${bridge_basename}_t master ${bridge_basename}_br
+
+        # give the bridge a cidr address (a.b.c.d/##)
+        ip addr add ${bridge_cidr} dev ${bridge_basename}_br
+
+    fi
+
+    # if peer_cidr is set in the pack, add it to the host side of the veth pair
+    if [[ -n ${peer_cidr} ]] ; then
+        ip addr add ${peer_cidr} dev ${devname}
+    fi
 
     # put one end of the veth pair in the bridge
-    ip link set ${devname} master ${ns_name}_br
+    ip link set ${devname} master ${bridge_basename}_br
 
-    # give the bridge a cidr address (a.b.c.d/##)
-    ip addr add ${bridge_cidr} dev ${ns_name}_br
-
-    # bring up the bridge
-    ip link set ${ns_name}_br up
+    if [[ ! -f /sys/class/net/${bridge_basename}_br ]] ; then
+        # bring up the bridge
+        ip link set ${bridge_basename}_br up
+    fi
 
     # put the other end of the veth pair in the namespace
     ip link set ${devname}p netns ${ns_name}
@@ -217,9 +245,46 @@ netns_setup_connected_network()
     ip netns exec ${ns_name} ip link set dev ${peer_devname} up
 
     # Add a route so that the namespace can communicate out
-    ip netns exec ${ns_name} ip route add default via ${bridge_cidr//\/[0-9]*/}
+    ip netns exec ${ns_name} ip route add default via ${bridge_cidr//\/[0-9]*/} dev ${peer_devname}
 
     #DNS is taken care of by the filesystem (either in a chroot or outside)
+}
+
+netns_setup_disconnected_network()
+{
+    $(declare_args netns_args_packname)
+
+    netns_check_pack ${netns_args_packname}
+
+    $(pack_import ${netns_args_packname})
+
+    $(tryrc netns_exists ${ns_name})
+    if [[ ${rc} -eq 1 ]] ; then
+        edebug "ERROR: namespace [${ns_name}] does not exist"
+        return 1
+    fi
+
+    if [[ -L /sys/class/net/${devname} ]] ; then
+        edebug "WARN: device (${devname}) already exists, returning"
+        return 0
+    fi
+
+    # We create the veth pair we need
+    # does this even need to be a pair?
+    ip link add dev ${devname} type veth peer name ${devname}p
+    ip link set dev ${devname} up
+
+    # put the other end of the veth pair in the namespace
+    ip link set ${devname}p netns ${ns_name}
+
+    # and rename the nic in the namespace to what was specified in the args
+    ip netns exec ${ns_name} ip link set dev ${devname}p name ${peer_devname}
+
+    #add the cidr address to the nic in the namespace
+    if [[ -n ${nic_cidr} ]] ; then
+        ip netns exec ${ns_name} ip addr add ${nic_cidr} dev ${peer_devname}
+        ip netns exec ${ns_name} ip link set dev ${peer_devname} up
+    fi
 }
 
 #-------------------------------------------------------------------------------
@@ -233,10 +298,12 @@ netns_remove_network()
 
     netns_check_pack ${netns_args_packname}
 
-    $(pack_import ${netns_args_packname} ns_name connected_nic)
+    $(pack_import ${netns_args_packname} ns_name connected_nic bridge_basename)
 
     local device
-    for device in /sys/class/net/${ns_name}* ; do
+    local chklist="/sys/class/net/${ns_name}*"
+
+    for device in /sys/class/net/${ns_name}* /sys/class/net/${bridge_basename}* ; do
       if [[ -L ${device} ]] ; then
           local basename_device=$(basename ${device})
           ip link set ${basename_device} down
@@ -256,7 +323,7 @@ netns_add_iptables_rules()
 {
     $(declare_args netns_args_packname)
 
-    netns_check_pack ${netns_args_packname}
+    netns_check_pack -c ${netns_args_packname}
 
     $(pack_import ${netns_args_packname} ns_name connected_nic)
 
@@ -264,7 +331,10 @@ netns_add_iptables_rules()
     for device in ${ns_name}_br ${connected_nic} ${@} ; do
         $(tryrc netns_iptables_rule_exists ${netns_args_packname} ${device})
         [[ ${rc} -eq 0 ]] && continue
-        iptables -t nat -A POSTROUTING -o ${device} -j MASQUERADE
+#ip netns exec ${ns_name} ip route add default via ${bridge_cidr//\/[0-9]*/} dev ${peer_devname}
+        iptables -t nat -A POSTROUTING -s ${peer_cidr//\/[0-9*/} -d ${nic_cidr//\/[0-9]*/} -j LOG --log-prefix "ns_crap"
+        iptables -t nat -A POSTROUTING -d ${peer_cidr//\/[0-9*/} -s ${nic_cidr//\/[0-9]*/} -j LOG --log-prefix "ns_crap"
+#        iptables -t nat -A POSTROUTING -o ${device} -j MASQUERADE
     done
 }
 
@@ -277,7 +347,7 @@ netns_remove_iptables_rules()
 {
     $(declare_args netns_args_packname)
 
-    netns_check_pack ${netns_args_packname}
+    netns_check_pack -c ${netns_args_packname}
 
     $(pack_import ${netns_args_packname} ns_name connected_nic)
 
@@ -285,7 +355,8 @@ netns_remove_iptables_rules()
     for device in ${ns_name}_br ${connected_nic} ${@} ; do
         $(tryrc netns_iptables_rule_exists ${netns_args_packname} ${device})
         [[ ${rc} -ne 0 ]] && continue
-        iptables -t nat -D POSTROUTING -o ${device} -j MASQUERADE
+        iptables -t nat -D POSTROUTING -o ${device} -j LOG --log-prefix "ns_crap"
+#        iptables -t nat -D POSTROUTING -o ${device} -j MASQUERADE
     done
 }
 
@@ -298,7 +369,7 @@ netns_iptables_rule_exists()
 {
     $(declare_args netns_args_packname devname)
 
-    netns_check_pack ${netns_args_packname}
+    netns_check_pack -c ${netns_args_packname}
 
     $(pack_import ${netns_args_packname} ns_name)
 
