@@ -78,7 +78,7 @@ ebanner "Starting up bashd" QUEUE=queue PID
 
 # Enter into an infinite loop waiting for jobs to be created. Feed them into our main event loop which will hand them
 # off to handle_job or prune completed jobs as appropriate.
-inotifywait --recursive --monitor --format "%e:%w%f" -e create ${queue} | \
+inotifywait --recursive --monitor --format "%e:%w%f" -e create "${queue}" | \
 while read entry; do
 
     # Event contains the event type (e.g. CREATE) followed by a colon followed by the path that was created.
@@ -88,13 +88,13 @@ while read entry; do
     edebug "$(lval event job pids)"
 
     # If this is a completed job wait on the pid so that its process state is reaped
-    if [[ ${event} == "CREATE" && ${job} == ${queue}/*/rc ]]; then
+    if [[ ${event} == "CREATE" && ${job} == "${queue}"/*/rc ]]; then
         pid=$(cat $(dirname ${job})/pid)
         rc=$(cat ${job})
         wait "${pid}" || true
         array_remove pids ${pid}
 
-    elif [[ ${event} == "CREATE" && ${job} == ${queue}/*/cmd ]]; then
+    elif [[ ${event} == "CREATE" && ${job} == "${queue}"/*/cmd ]]; then
         handle_job "$(dirname ${job})" &
         pids+=( $! )
 
