@@ -52,6 +52,10 @@
 
     - Bashutils now explicitly chooses a locale (en_US.utf8)
 
+    - Added new standalone 'bashd' daemon which can be used to execute bash
+      commands in a native bash environment even if the caller is not running
+      bash. This is often safer and simpler than using fork+exec and avoids
+      complex process management and other difficult race conditions.
 
 # Bashutils 1.0
 
