@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+
+# Bashd is a long running instance of bash which can be used to execute bash commands in a native bash environment 
+# even if the caller is not running bash. The advantage to this approach as opposed to alternative approaches with
+# calling something like system() directly is it removes the need for fork and exec which oftentimes cannot be
+# safely called in some environments. The common use case for this is when a process has massive amounts of memory
+# allocated (e.g. 256GB) and tries to fork+exec bash (e.g. via system) the process can easily be OOM'd between the
+# fork and the exec while the kernel is going through and marking all the pages as copy on write. Other attempts to
+# solve this problem differently with a long-running embedded bash instance suffer different problems which are
+# prone to race conditions around pipe handline and process lifetime management.
+#
+# Bashd is an exceedingly simple solution to this problem which exposes a simple API wherein the caller creates
+# a temporary directory in a known queue directory with mktemp(1) or mktemp(3) with a special control file with
+# a set of key=value entries in the file which will control what bashd will do. The only required key in this
+# control file is 'cmd' which indicates the command that should be invoked by bashd. In the future, other keys
+# will be supported such as 'timeout', 'cgroup', etc., to give greater degrees of control to what bashd does.
+# Bashd will then execute the command on behalf of the caller and write the command's STDOUT and STDERR into files
+# named 'stdout' and 'stderr' inside that same temporary directory. Once the process is completed, it will capture
+# it's return code and write that out into a file named 'rc' in that same temporary directory.
+#
+# The caller can simply poll waiting for the creation of the 'rc' file as a signal that the process has finished
+# at which point it can then read it's stdout, stderr and rc files. The recommended efficient way to achieve this
+# is using inotify(7) rather than manually polling waiting for the file to be created. Bashd itself uses inotify(7)
+# in order to very efficiently wait for new jobs to be created without having to poll. It also takes care of
+# reaping the status of these jobs so as to not have a bunch of unreaped processes filling the process table.
+# Finally, bashd is careful to run each process in its own execution environment without sourcing any initialization
+# files to ensure as pristine an environment as possible.
+
+#----------------------------------------------------------------------------------------------------------------------
+# FUNCTIONS
+#----------------------------------------------------------------------------------------------------------------------
+
+: ${BASHUTILS:=$(dirname $0)}
+source ${BASHUTILS}/bashutils.sh || { echo "Failed to source ${BASHUTILS}/bashutils.sh" ; exit 1 ; }
+
+# handle_job is an internal function which handles a single job. This takes care of actually spawning a clean
+# instance of bash and executing the command given to it by the caller and storing the stdout, stderr and return 
+# code into files in the specified job directory.
+handle_job()
+{
+    local job="${1}"
+    
+    local rc=0
+    echo "${BASHPID}" > "${job}/pid"
+    local cmd=$(cat "${job}/cmd")
+    einfo "${job} :: Starting ${BASHPID} (${cmd})"
+
+    # Launch bash with restricted environment to reduce changes of environmental blead over. Specifically:
+    # --noprofile    Do not read either the system-wide startup file /etc/profile or any of the personal initialization file
+    # --norc         Do not read/execute system wide initialization file and personal initialization file ~/.bashrc
+    # -c <cmd>       Execute commands in string.
+    #
+    # NOTE: This code purposefully diables fatal error handling by the "&& rc=0 || rc=$?" idiom. This is because we
+    #       do not want a failure in this command to cause bashd itself to exit. Moreover, we don't care about any
+    #       set -e error handling or traps since we specifically want a pristine environment and are thus launching
+    #       a fresh instance of bash.
+    bash --noprofile --norc -c "${cmd} 1>${job}/stdout 2>${job}/stderr" && rc=0 || rc=$?
+    echo "${rc}" >"${job}/rc"
+    
+    einfo "${job} :: Complete ${BASHPID} (${cmd}) rc=${rc} stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
+}
+
+#----------------------------------------------------------------------------------------------------------------------
+# MAIN
+#----------------------------------------------------------------------------------------------------------------------
+
+# Parse options including the queue directory to use. This defaults to just '/var/run/bashd'.
+$(declare_args -g ?queue)
+: ${queue:=/var/run/bashd}
+queue=$(readlink -m "${queue}")
+efreshdir ${queue}
+
+# Track the PIDs of the backgrounded processes that bashd launches. These are really only tracked for debugging
+# purposes and do not affect the core functionality of bashd itself.
+pids=()
+PID=$$
+ebanner "Starting up bashd" QUEUE=queue PID
+
+# Enter into an infinite loop waiting for jobs to be created. Feed them into our main event loop which will hand them
+# off to handle_job or prune completed jobs as appropriate.
+inotifywait --recursive --monitor --format "%e:%w%f" -e create ${queue} | \
+while read entry; do
+
+    # Event contains the event type (e.g. CREATE) followed by a colon followed by the path that was created.
+    # Parse out the event type and job path.
+    event=${entry%%:*}
+    job=${entry#*:}
+    edebug "$(lval event job pids)"
+
+    # If this is a completed job wait on the pid so that its process state is reaped
+    if [[ ${event} == "CREATE" && ${job} == ${queue}/*/rc ]]; then
+        pid=$(cat $(dirname ${job})/pid)
+        rc=$(cat ${job})
+        wait "${pid}" || true
+        array_remove pids ${pid}
+
+    elif [[ ${event} == "CREATE" && ${job} == ${queue}/*/cmd ]]; then
+        handle_job "$(dirname ${job})" &
+        pids+=( $! )
+
+    elif [[ ${event} == "CREATE,ISDIR" && -e ${job}/cmd ]]; then
+        handle_job "${job}" &
+        pids+=( $! )
+    fi
+
+    edebug "$(lval pids)"
+
+done
+

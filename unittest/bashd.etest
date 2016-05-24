@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+
+#-----------------------------------------------------------------------------
+# SETUP / INFRA
+#-----------------------------------------------------------------------------
+
+source ${ETEST_TOPDIR}/unittest/daemon_expect.sh
+
+BASHD_PIDFILE="bashd-$$.pid"
+BASHD_QUEUE="/var/run/bashd/$$"
+
+daemon_init BASHD_DAEMON                           \
+    "${DAEMON_EXPECT[@]}"                          \
+    name="bashd"                                   \
+    cmdline="${ETEST_TOPDIR}/bashd ${BASHD_QUEUE}" \
+    pidfile="${BASHD_PIDFILE}"
+
+bashd_start()
+{
+    # Start the daemon
+    daemon_start BASHD_DAEMON
+
+    # Wait for process to be running
+    daemon_expect pre_start
+    daemon_expect post_start
+    assert_true daemon_running BASHD_DAEMON
+    assert [[ -s ${BASHD_PIDFILE} ]]
+    assert process_running $(cat ${BASHD_PIDFILE})
+    assert daemon_running BASHD_DAEMON
+    assert daemon_status  BASHD_DAEMON
+}
+
+bashd_stop()
+{
+    # Now stop it and verify proper shutdown
+    local pid=$(cat "${BASHD_PIDFILE}")
+    daemon_stop BASHD_DAEMON &
+    daemon_expect pre_stop
+    daemon_expect post_stop
+    wait
+    assert_false daemon_running BASHD_DAEMON
+    assert_false daemon_status -q BASHD_DAEMON
+    assert_not_exists ${BASHD_PIDFILE}
+}
+
+bashd_run_cmd()
+{
+    $(declare_args cmd ?rc ?stdout ?stderr)
+    [[ -z ${rc} ]] && rc=0
+
+    local tmpdir=$(mktemp -d ${BASHD_QUEUE}/bashd-XXXXXX)
+    
+    einfo "${tmpdir} :: Starting ${BASHPID} (${cmd})"
+    echo "${cmd}" >"${tmpdir}/cmd"
+
+    # Wait for 'rc' to show up indicating the command finished
+    while true; do
+
+        if [[ -e "${tmpdir}/rc" ]]; then
+            einfo "${tmpdir} :: Complete $BASHPID rc=$(cat ${tmpdir}/rc) stdout=\"$(cat ${tmpdir}/stdout)\" stderr=\"$(cat ${tmpdir}/stderr)\""
+            break
+        fi
+
+        sleep 0.5
+    done
+
+    # Always validate return code and optionally validate STDOUT and STDERR if we were not
+    # asked to explicitly ignore them with an expected value of "_".
+    assert_eq "${rc}" "$(cat ${tmpdir}/rc)" "${BASHPID} failed (${tmpdir}/rc)"
+
+    if [[ ${stdout} != "_" ]]; then
+        assert_eq "${stdout}" "$(cat ${tmpdir}/stdout)" "${BASHPID} failed (${tmpdir}/stdout)"
+    fi
+
+    if [[ ${stderr} != "_" ]]; then
+        assert_eq "${stderr}" "$(cat ${tmpdir}/stderr)" "${BASHPID} failed (${tmpdir}/stderr)"
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# UNITTESTS
+#-----------------------------------------------------------------------------
+
+ETEST_bashd_basic_start_stop()
+{
+    bashd_start
+    trap_add bashd_stop
+}
+
+ETEST_bashd_single_job()
+{
+    bashd_start
+    trap_add bashd_stop
+    bashd_run_cmd "whoami" "0" "${USER}" ""
+}
+
+ETEST_bashd_parallel_jobs()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    local pids=()
+    for (( i=0; i<=20; i++ )); do
+        bashd_run_cmd "sleep ${i}" &
+        pids+=( $! )
+    done
+
+    # Wait for all backgrounded pids to complete
+    local pid
+    for pid in ${pids[@]}; do
+        wait ${pid}
+    done
+}
+
+ETEST_bashd_command_spaces()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    assert_not_exists foo
+    bashd_run_cmd "touch foo"
+    assert_exists foo
+}
+
+ETEST_bashd_multiple_commands()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    assert_not_exists foo bar zap
+    bashd_run_cmd "touch foo; touch bar; touch zap"
+    assert_exists foo bar zap
+}
+
+ETEST_bashd_pipeline()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    bashd_run_cmd "echo foo | grep -o f" "0" "f" ""
+}
+
+ETEST_bashd_failure()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    bashd_run_cmd "mkdir /tmp" "1" "" "mkdir: cannot create directory ‘/tmp’: File exists"
+}
+
+# Verify fatal errors inside commands do not cause bashd to fail
+ETEST_bashd_signals()
+{
+    bashd_start
+    trap_add bashd_stop
+    local pid=$(cat "${BASHD_PIDFILE}")
+
+    local signal
+    for signal in ${DIE_SIGNALS[@]}; do
+
+        # Skip signals which are uncatchable
+        if [[ ${signal} =~ (SIGKILL|SIGSTOP|SIGSEGV|SIGQUIT) ]]; then
+            einfo "Skipping uncatchable $(lval signal)"
+            continue
+        fi
+
+        einfo "Testing $(lval signal)"
+        
+        # bashd must still be running
+        assert process_running "${pid}"
+
+        bashd_run_cmd "ulimit -c 0; kill -${signal} \${BASHPID}" "$(sigexitcode ${signal})" "_" "_"
+
+        # Ensure bashd is still running
+        assert process_running "${pid}"
+    done
+}
+
+ETEST_bashd_stress()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    local iter=0 num_iterations=10 thread=0 num_threads=100
+    local uname_output="$(uname -a)"
+
+    for (( iter=0; iter < num_iterations; iter++ )); do
+    
+        etestmsg "Stress testing: [${iter}/${num_iterations}]"
+
+        local pids=()
+        for (( thread=0; thread < num_threads; thread++ )); do
+            bashd_run_cmd "uname -a" "0" "${uname_output}" "" &
+            pids+=( $! )
+        done
+
+        etestmsg "Waiting for background jobs: $(lval pids)"
+        local pid
+        for pid in ${pids[@]}; do
+            wait "${pid}"
+        done
+        unset pids
+    done
+}
