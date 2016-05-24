@@ -16,10 +16,10 @@
 # will be supported such as 'timeout', 'cgroup', etc., to give greater degrees of control to what bashd does.
 # Bashd will then execute the command on behalf of the caller and write the command's STDOUT and STDERR into files
 # named 'stdout' and 'stderr' inside that same temporary directory. Once the process is completed, it will capture
-# it's return code and write that out into a file named 'rc' in that same temporary directory.
+# its return code and write that out into a file named 'rc' in that same temporary directory.
 #
 # The caller can simply poll waiting for the creation of the 'rc' file as a signal that the process has finished
-# at which point it can then read it's stdout, stderr and rc files. The recommended efficient way to achieve this
+# at which point it can then read its stdout, stderr and rc files. The recommended efficient way to achieve this
 # is using inotify(7) rather than manually polling waiting for the file to be created. Bashd itself uses inotify(7)
 # in order to very efficiently wait for new jobs to be created without having to poll. It also takes care of
 # reaping the status of these jobs so as to not have a bunch of unreaped processes filling the process table.
