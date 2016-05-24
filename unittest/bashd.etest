@@ -46,7 +46,7 @@ bashd_stop()
 bashd_run_cmd()
 {
     $(declare_args cmd ?rc ?stdout ?stderr)
-    [[ -z ${rc} ]] && rc=0
+    : ${rc:=0}
 
     local tmpdir=$(mktemp -d ${BASHD_QUEUE}/bashd-XXXXXX)
     
@@ -61,7 +61,7 @@ bashd_run_cmd()
             break
         fi
 
-        sleep 0.5
+        sleep 0.1
     done
 
     # Always validate return code and optionally validate STDOUT and STDERR if we were not
@@ -159,7 +159,7 @@ ETEST_bashd_signals()
     for signal in ${DIE_SIGNALS[@]}; do
 
         # Skip signals which are uncatchable
-        if [[ ${signal} =~ (SIGKILL|SIGSTOP|SIGSEGV|SIGQUIT) ]]; then
+        if [[ ${signal} == @(SIGKILL|SIGSTOP|SIGSEGV|SIGQUIT) ]]; then
             einfo "Skipping uncatchable $(lval signal)"
             continue
         fi
