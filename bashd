@@ -10,13 +10,13 @@
 # prone to race conditions around pipe handline and process lifetime management.
 #
 # Bashd is an exceedingly simple solution to this problem which exposes a simple API wherein the caller creates
-# a temporary directory in a known queue directory with mktemp(1) or mktemp(3) with a special control file with
-# a set of key=value entries in the file which will control what bashd will do. The only required key in this
-# control file is 'cmd' which indicates the command that should be invoked by bashd. In the future, other keys
-# will be supported such as 'timeout', 'cgroup', etc., to give greater degrees of control to what bashd does.
-# Bashd will then execute the command on behalf of the caller and write the command's STDOUT and STDERR into files
-# named 'stdout' and 'stderr' inside that same temporary directory. Once the process is completed, it will capture
-# its return code and write that out into a file named 'rc' in that same temporary directory.
+# a temporary directory in a known queue directory with mktemp(1) or mktemp(3) with a special control file named
+# 'options' which contains a set of key=value entries which control what bashd will do. The only required key in
+# this file is 'cmdline' which indicates the command that should be invoked by bashd. For a full list of these
+# options see the OPTIONS section below. Bashd will then execute the command on behalf of the caller and write
+# the command's STDOUT and STDERR into files named 'stdout' and 'stderr' inside that same temporary directory.
+# Once the process is completed, it will capture its return code and write that out into a file named 'rc' in
+# that same temporary directory.
 #
 # The caller can simply poll waiting for the creation of the 'rc' file as a signal that the process has finished
 # at which point it can then read its stdout, stderr and rc files. The recommended efficient way to achieve this
@@ -25,7 +25,24 @@
 # reaping the status of these jobs so as to not have a bunch of unreaped processes filling the process table.
 # Finally, bashd is careful to run each process in its own execution environment without sourcing any initialization
 # files to ensure as pristine an environment as possible.
-
+#
+# OPTIONS
+# =======
+#
+# The following are the keys used to control bashd functionality on a per-command basis.
+#
+# cmdline
+#   The command line to be run. This includes the executable as well as any of its arguments. This could be a simple
+#   command, a compound command, or refer to some external and arbitrarily complex script or binary.
+#
+# timeout
+#   Optional timeout to kill the command it hasn't exited. If it's a simple number, the duration will be a number in
+#   seconds. You may also specify suffixes in the same format the timeout command accepts them. For instance, you
+#   might specify 5m or 1h or 2d for 5 minutes, 1 hour, or 2 days, respectively. If the command is timedout then it will
+#   have a return code of 124 to match the behavior of the vanilla timeout(1) command. If the command fails to exit
+#   after receiving requested signal it will send SIGKILL to the process. If this happens the return code will still be
+#   124 since we rely on that return code to indicate that a process timedout and was prematurely terminated.
+#
 #----------------------------------------------------------------------------------------------------------------------
 # FUNCTIONS
 #----------------------------------------------------------------------------------------------------------------------
@@ -39,11 +56,14 @@ source ${BASHUTILS}/bashutils.sh || { echo "Failed to source ${BASHUTILS}/bashut
 handle_job()
 {
     local job="${1}"
-    
     local rc=0
     echo "${BASHPID}" > "${job}/pid"
-    local cmd=$(cat "${job}/cmd")
-    einfo "${job} :: Starting ${BASHPID} (${cmd})"
+    
+    # Extract options for this job
+    local cmdline=$(grep -Po 'cmdline=\K(.*)' ${job}/options)
+    local timeout=$(grep -Po 'timeout=\K(.*)' ${job}/options || true)
+    : ${timeout:="infinity"}
+    einfo "${job} :: Starting ${BASHPID} $(lval cmdline timeout) options=$(cat ${job}/options)"
 
     # Launch bash with restricted environment to reduce changes of environmental blead over. Specifically:
     # --noprofile    Do not read either the system-wide startup file /etc/profile or any of the personal initialization file
@@ -54,10 +74,9 @@ handle_job()
     #       do not want a failure in this command to cause bashd itself to exit. Moreover, we don't care about any
     #       set -e error handling or traps since we specifically want a pristine environment and are thus launching
     #       a fresh instance of bash.
-    bash --noprofile --norc -c "${cmd} 1>${job}/stdout 2>${job}/stderr" && rc=0 || rc=$?
+    etimeout -t=${timeout} bash --noprofile --norc -c "${cmdline} 1>${job}/stdout 2>${job}/stderr" && rc=0 || rc=$?
     echo "${rc}" >"${job}/rc"
-    
-    einfo "${job} :: Complete ${BASHPID} (${cmd}) rc=${rc} stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
+    einfo "${job} :: Complete ${BASHPID} (${cmdline}) rc=${rc} stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
 }
 
 #----------------------------------------------------------------------------------------------------------------------
@@ -94,11 +113,15 @@ while read entry; do
         wait "${pid}" || true
         array_remove pids ${pid}
 
-    elif [[ ${event} == "CREATE" && ${job} == "${queue}"/*/cmd ]]; then
+    # This case handles the scenario where the options file is created after the original temp job directory
+    # is created. E.g. they've done a 'mkdir queue/foo' then later move the options file into that directory.
+    elif [[ ${event} == "CREATE" && ${job} == "${queue}"/*/options ]]; then
         handle_job "$(dirname ${job})" &
         pids+=( $! )
 
-    elif [[ ${event} == "CREATE,ISDIR" && -e ${job}/cmd ]]; then
+    # This case handles the scenario where an entire directory is created which already contains the options
+    # file and the the entire directory is moved into the queue directory.
+    elif [[ ${event} == "CREATE,ISDIR" && -e ${job}/options ]]; then
         handle_job "${job}" &
         pids+=( $! )
     fi
