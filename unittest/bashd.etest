@@ -43,15 +43,15 @@ bashd_stop()
     assert_not_exists ${BASHD_PIDFILE}
 }
 
-bashd_run_cmd()
+bashd_run()
 {
-    $(declare_args cmd ?rc ?stdout ?stderr)
+    $(declare_args cmdline ?rc ?stdout ?stderr)
     : ${rc:=0}
-
+    local timeout=$(opt_get t "")
     local tmpdir=$(mktemp -d ${BASHD_QUEUE}/bashd-XXXXXX)
-    
-    einfo "${tmpdir} :: Starting ${BASHPID} (${cmd})"
-    echo "${cmd}" >"${tmpdir}/cmd"
+
+    einfo "${tmpdir} :: Starting ${BASHPID} (${cmdline})"
+    printf "cmdline=${cmdline}\ntimeout=${timeout}" > "${tmpdir}/options"
 
     # Wait for 'rc' to show up indicating the command finished
     while true; do
@@ -91,7 +91,7 @@ ETEST_bashd_single_job()
 {
     bashd_start
     trap_add bashd_stop
-    bashd_run_cmd "whoami" "0" "${USER}" ""
+    bashd_run "whoami" "0" "${USER}" ""
 }
 
 ETEST_bashd_parallel_jobs()
@@ -101,7 +101,7 @@ ETEST_bashd_parallel_jobs()
 
     local pids=()
     for (( i=0; i<=20; i++ )); do
-        bashd_run_cmd "sleep ${i}" &
+        bashd_run "sleep ${i}" &
         pids+=( $! )
     done
 
@@ -118,18 +118,30 @@ ETEST_bashd_command_spaces()
     trap_add bashd_stop
 
     assert_not_exists foo
-    bashd_run_cmd "touch foo"
+    bashd_run "touch foo"
     assert_exists foo
+
+    assert_not_exists "foo bar"
+    bashd_run 'touch "foo bar"'
+    assert_exists "foo bar"
 }
 
-ETEST_bashd_multiple_commands()
+ETEST_bashd_compound_command()
 {
     bashd_start
     trap_add bashd_stop
 
     assert_not_exists foo bar zap
-    bashd_run_cmd "touch foo; touch bar; touch zap"
+    bashd_run "touch foo; touch bar; touch zap"
     assert_exists foo bar zap
+}
+
+ETEST_bashd_compound_command_with_output()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    bashd_run "echo A; echo B" "0" $'A\nB'
 }
 
 ETEST_bashd_pipeline()
@@ -137,15 +149,31 @@ ETEST_bashd_pipeline()
     bashd_start
     trap_add bashd_stop
 
-    bashd_run_cmd "echo foo | grep -o f" "0" "f" ""
+    bashd_run "echo foo | grep -o f" "0" "f" ""
 }
 
 ETEST_bashd_failure()
 {
     bashd_start
     trap_add bashd_stop
+    
+    bashd_run "mkdir /tmp" "1" "" "mkdir: cannot create directory ‘/tmp’: File exists"
+}
 
-    bashd_run_cmd "mkdir /tmp" "1" "" "mkdir: cannot create directory ‘/tmp’: File exists"
+ETEST_bashd_unknown_command()
+{
+    bashd_start
+    trap_add bashd_stop
+ 
+    bashd_run "foobarzap" "127" "" "bash: foobarzap: command not found"
+}
+
+ETEST_bashd_timeout()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    bashd_run -t=1s "sleep infinity" "124" "" "_"
 }
 
 # Verify fatal errors inside commands do not cause bashd to fail
@@ -158,9 +186,10 @@ ETEST_bashd_signals()
     local signal
     for signal in ${DIE_SIGNALS[@]}; do
 
-        # Skip signals which are uncatchable
-        if [[ ${signal} == @(SIGKILL|SIGSTOP|SIGSEGV|SIGQUIT) ]]; then
-            einfo "Skipping uncatchable $(lval signal)"
+        # Skip TTY_SIGNALS since bashutils interprets these specially and 
+        # causes the process to exit with 0.
+        if array_contains TTY_SIGNALS "${signal}"; then
+            einfo "Skipping TTY $(lval signal TTY_SIGNALS)"
             continue
         fi
 
@@ -169,7 +198,7 @@ ETEST_bashd_signals()
         # bashd must still be running
         assert process_running "${pid}"
 
-        bashd_run_cmd "ulimit -c 0; kill -${signal} \${BASHPID}" "$(sigexitcode ${signal})" "_" "_"
+        bashd_run "ulimit -c 0; kill -${signal} \${BASHPID}" "$(sigexitcode ${signal})" "_" "_"
 
         # Ensure bashd is still running
         assert process_running "${pid}"
@@ -190,7 +219,7 @@ ETEST_bashd_stress()
 
         local pids=()
         for (( thread=0; thread < num_threads; thread++ )); do
-            bashd_run_cmd "uname -a" "0" "${uname_output}" "" &
+            bashd_run "uname -a" "0" "${uname_output}" &
             pids+=( $! )
         done
 
