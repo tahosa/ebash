@@ -172,8 +172,8 @@ run_single_test()
     source ${testfile}
     declare -f ${testfunc} &>/dev/null || return 0
 
-    ebanner "${testfunc}" REPEAT=REPEAT_STRING
- 
+    ebanner "${testfunc}" REPEAT=REPEAT_STRING BREAK
+
     einfos ${testfunc} &>${ETEST_OUT}
    
     # We want to make sure that any traps from the tests
