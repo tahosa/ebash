@@ -63,7 +63,6 @@ handle_job()
     # Extract options for this job
     local cmdline=$(grep -Po 'cmdline=\K(.*)' ${job}/options)
     local timeout=$(grep -Po 'timeout=\K(.*)' ${job}/options || true)
-    : ${timeout:="infinity"}
     einfo "${job} :: Starting ${BASHPID} $(lval cmdline timeout) options=$(cat ${job}/options)"
 
     # Launch bash with restricted environment to reduce changes of environmental blead over. Specifically:
@@ -75,7 +74,11 @@ handle_job()
     #       do not want a failure in this command to cause bashd itself to exit. Moreover, we don't care about any
     #       set -e error handling or traps since we specifically want a pristine environment and are thus launching
     #       a fresh instance of bash.
-    etimeout -t=${timeout} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
+    if [[ -n ${timeout} ]]; then
+        timeout ${timeout} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
+    else
+        bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
+    fi
     echo "${rc}" >"${job}/rc"
     einfo "${job} :: Complete ${BASHPID} (${cmdline}) rc=${rc} stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
 }
