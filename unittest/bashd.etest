@@ -120,9 +120,13 @@ ETEST_bashd_command_spaces()
     assert_not_exists foo
     bashd_run "touch foo"
     assert_exists foo
+
+    assert_not_exists "foo bar"
+    bashd_run 'touch "foo bar"'
+    assert_exists "foo bar"
 }
 
-ETEST_bashd_multiple_commands()
+ETEST_bashd_compound_command()
 {
     bashd_start
     trap_add bashd_stop
@@ -130,6 +134,14 @@ ETEST_bashd_multiple_commands()
     assert_not_exists foo bar zap
     bashd_run "touch foo; touch bar; touch zap"
     assert_exists foo bar zap
+}
+
+ETEST_bashd_compound_command_with_output()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    bashd_run "echo A; echo B" "0" $'A\nB'
 }
 
 ETEST_bashd_pipeline()
@@ -161,7 +173,7 @@ ETEST_bashd_timeout()
     bashd_start
     trap_add bashd_stop
 
-    bashd_run -t=1s "sleep infinity" "124"
+    bashd_run -t=1s "sleep infinity" "124" "" "_"
 }
 
 # Verify fatal errors inside commands do not cause bashd to fail
@@ -174,9 +186,10 @@ ETEST_bashd_signals()
     local signal
     for signal in ${DIE_SIGNALS[@]}; do
 
-        # Skip signals which are uncatchable
-        if [[ ${signal} == @(SIGINT|SIGKILL|SIGSTOP|SIGSEGV|SIGQUIT) ]]; then
-            einfo "Skipping uncatchable $(lval signal)"
+        # Skip TTY_SIGNALS since bashutils interprets these specially and 
+        # causes the process to exit with 0.
+        if array_contains TTY_SIGNALS "${signal}"; then
+            einfo "Skipping TTY $(lval signal TTY_SIGNALS)"
             continue
         fi
 
@@ -206,7 +219,7 @@ ETEST_bashd_stress()
 
         local pids=()
         for (( thread=0; thread < num_threads; thread++ )); do
-            bashd_run "uname -a" "0" "${uname_output}" "" &
+            bashd_run "uname -a" "0" "${uname_output}" &
             pids+=( $! )
         done
 

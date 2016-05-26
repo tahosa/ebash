@@ -33,7 +33,8 @@
 #
 # cmdline
 #   The command line to be run. This includes the executable as well as any of its arguments. This could be a simple
-#   command, a compound command, or refer to some external and arbitrarily complex script or binary.
+#   command, a compound command, or refer to some external and arbitrarily complex script or binary. If the command
+#   has whitespace in it be sure to quote the whitespace properly and bashd will honor it.
 #
 # timeout
 #   Optional timeout to kill the command it hasn't exited. If it's a simple number, the duration will be a number in
@@ -74,7 +75,7 @@ handle_job()
     #       do not want a failure in this command to cause bashd itself to exit. Moreover, we don't care about any
     #       set -e error handling or traps since we specifically want a pristine environment and are thus launching
     #       a fresh instance of bash.
-    etimeout -t=${timeout} bash --noprofile --norc -c "${cmdline} 1>${job}/stdout 2>${job}/stderr" && rc=0 || rc=$?
+    etimeout -t=${timeout} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
     echo "${rc}" >"${job}/rc"
     einfo "${job} :: Complete ${BASHPID} (${cmdline}) rc=${rc} stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
 }
