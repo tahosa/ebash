@@ -23,7 +23,12 @@ bashd_start()
     # Wait for process to be running
     daemon_expect pre_start
     daemon_expect post_start
-    assert_true daemon_running BASHD_DAEMON
+
+    if daemon_not_running BASHD_DAEMON; then
+        cat logfile.log
+        die "bashd failed to start"
+    fi
+
     assert [[ -s ${BASHD_PIDFILE} ]]
     assert process_running $(cat ${BASHD_PIDFILE})
     assert daemon_running BASHD_DAEMON
