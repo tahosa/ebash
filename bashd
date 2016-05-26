@@ -48,7 +48,7 @@
 # FUNCTIONS
 #----------------------------------------------------------------------------------------------------------------------
 
-: ${BASHUTILS:=$(dirname $0)}
+: ${BASHUTILS:=$(readlink -m $(dirname $0))}
 source ${BASHUTILS}/bashutils.sh || { echo "Failed to source ${BASHUTILS}/bashutils.sh" ; exit 1 ; }
 
 # handle_job is an internal function which handles a single job. This takes care of actually spawning a clean

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-: ${BASHUTILS:=$(dirname $0)}
+: ${BASHUTILS:=$(readlink -m $(dirname $0))}
 source "${BASHUTILS}/bashutils.sh" || { echo "Unable to source ${BASHUTILS}/bashutils.sh" ; exit 1 ; }
 
 #-------------------------------------------------------------------------------
