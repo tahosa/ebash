@@ -162,7 +162,7 @@ ETEST_bashd_failure()
     bashd_start
     trap_add bashd_stop
     
-    bashd_run "mkdir /tmp" "1" "" "mkdir: cannot create directory ‘/tmp’: File exists"
+    bashd_run "false" "1"
 }
 
 ETEST_bashd_unknown_command()
