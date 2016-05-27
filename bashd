@@ -63,7 +63,7 @@ handle_job()
     # Extract options for this job
     local cmdline=$(grep -Po 'cmdline=\K(.*)' ${job}/options)
     local timeout=$(grep -Po 'timeout=\K(.*)' ${job}/options || true)
-    einfo "${job} :: Starting ${BASHPID} $(lval cmdline timeout) options=$(cat ${job}/options)"
+    einfo "${job} :: Starting ${BASHPID} $(lval cmdline timeout)"
 
     # Launch bash with restricted environment to reduce changes of environmental blead over. Specifically:
     # --noprofile    Do not read either the system-wide startup file /etc/profile or any of the personal initialization file
@@ -80,7 +80,35 @@ handle_job()
         bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
     fi
     echo "${rc}" >"${job}/rc"
-    einfo "${job} :: Complete ${BASHPID} (${cmdline}) rc=${rc} stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
+    einfo "${job} :: Complete ${BASHPID} $(lval cmdline timeout rc) stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
+}
+
+# Helper function to kill a stale job or orphaned job.
+kill_job()
+{
+    $(declare_args msg job)
+ 
+    # Get the pid for this job if we can
+    local pid=$(cat ${job}/pid || true)
+    local delete=$(opt_get d 0)
+
+    ewarn "${job} :: ${msg} ${pid} $(lval delete)"
+    tail -n +1 -- "${job}"/*
+
+    if process_running ${pid}; then
+        ewarn "Killing runing $(lval pid)"
+        ekilltree -s=9 ${pid}
+        wait "${pid}" || true
+    fi
+        
+    # Optionally remove the directory. Otherwise record failure indicating we killed the job
+    if [[ ${delete} -eq 1 ]]; then
+        edebug "Deleting ${job}"
+        rm --recursive --force --one-file-system "${job}"
+    else
+        edebug "Marking ${job} as failed"
+        echo "$(sigexitcode SIGKILL)" >"${job}/rc"
+    fi
 }
 
 #----------------------------------------------------------------------------------------------------------------------
@@ -88,19 +116,42 @@ handle_job()
 #----------------------------------------------------------------------------------------------------------------------
 
 # Parse options including the queue directory to use. This defaults to just '/var/run/bashd'.
-$(declare_args -g ?queue)
-: ${queue:=/var/run/bashd}
-queue=$(readlink -m "${queue}")
-efreshdir ${queue}
+# Also parse the default threshold to purge all jobs older than specified time (defaults to 1 day).
+# old.
+$(declare_args -g)
+queue=$(readlink -m $(opt_get q /var/run/bashd))
+mkdir -p "${queue}"
+purge=$(opt_get p 1d)
 
 # Track the PIDs of the backgrounded processes that bashd launches. These are really only tracked for debugging
 # purposes and do not affect the core functionality of bashd itself.
 pids=()
-PID=$$
-ebanner "Starting up bashd" QUEUE=queue PID
+PID=${BASHPID}
+ebanner "Starting up bashd" QUEUE=queue PID PURGE=purge
+
+# Deal with any orphaned jobs which never got finished due to a crash of bashd. The jobs may not be idempotent
+# so we don't want to simply redo the commands. Instead we explicitly mark any orphaned jobs as failed so the caller
+# can observe the failure and do whatever they like with the failure.
+einfo "Checking for orphaned jobs"
+for job in $(find "${queue}" -type d -maxdepth 1); do
+    
+    # Forcibly mark any orphaned jobs as failures. An orphaned job is one which we explicitly started (as denoted
+    # by the presence of the pid file) but never completed (as denoted by the absence of the rc file).
+    if [[ -e "${job}/pid" && ! -e "${job}/rc" ]]; then
+        kill_job "Orphaned" "${job}"
+
+    # Otherwise, if there is no 'pid' file and no 'rc' file AND an 'options' file then we never even tried to run
+    # this job. Go ahead and dispatch the job as normal.
+    elif [[ ! -e "${job}/pid" && ! -e "${job}/rc" && -e "${job}/options" ]]; then
+        handle_job "${job}" &
+        pids+=( $! )
+    fi
+
+done
 
 # Enter into an infinite loop waiting for jobs to be created. Feed them into our main event loop which will hand them
 # off to handle_job or prune completed jobs as appropriate.
+einfo "Starting up main event loop"
 inotifywait --recursive --monitor --format "%e:%w%f" -e create "${queue}" | \
 while read entry; do
 
@@ -117,20 +168,19 @@ while read entry; do
         wait "${pid}" || true
         array_remove pids ${pid}
 
-    # This case handles the scenario where the options file is created after the original temp job directory
-    # is created. E.g. they've done a 'mkdir queue/foo' then later move the options file into that directory.
+    # Otherwise if it's a new job that's been created (as indicated by options file) then dispatch it accordingly.
     elif [[ ${event} == "CREATE" && ${job} == "${queue}"/*/options ]]; then
         handle_job "$(dirname ${job})" &
-        pids+=( $! )
-
-    # This case handles the scenario where an entire directory is created which already contains the options
-    # file and the the entire directory is moved into the queue directory.
-    elif [[ ${event} == "CREATE,ISDIR" && -e ${job}/options ]]; then
-        handle_job "${job}" &
         pids+=( $! )
     fi
 
     edebug "$(lval pids)"
 
+    # Purge all jobs older than specified purge interval. Any active jobs older than purge interval are
+    # explicitly killed. Find doesn't support an 'older' flag but you can achieve the same effect with
+    # the '-not -newer' idiom.
+    for job in $(find "${queue}" -type d -maxdepth 1 -not -newermt ${purge}); do
+        kill_job -d=1 "Purging" "${job}"
+    done
 done
 

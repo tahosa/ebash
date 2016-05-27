@@ -6,13 +6,13 @@
 
 source ${ETEST_TOPDIR}/unittest/daemon_expect.sh
 
-BASHD_PIDFILE="bashd-$$.pid"
+BASHD_PIDFILE=$(readlink -m bashd-$$.pid)
 BASHD_QUEUE="/var/run/bashd/$$"
 
-daemon_init BASHD_DAEMON                           \
-    "${DAEMON_EXPECT[@]}"                          \
-    name="bashd"                                   \
-    cmdline="${ETEST_TOPDIR}/bashd ${BASHD_QUEUE}" \
+daemon_init BASHD_DAEMON                              \
+    "${DAEMON_EXPECT[@]}"                             \
+    name="bashd"                                      \
+    cmdline="${ETEST_TOPDIR}/bashd -q=${BASHD_QUEUE}" \
     pidfile="${BASHD_PIDFILE}"
 
 bashd_start()
@@ -37,15 +37,23 @@ bashd_start()
 
 bashd_stop()
 {
+    $(declare_args)
+    local delete=$(opt_get d 1)
+
     # Now stop it and verify proper shutdown
     local pid=$(cat "${BASHD_PIDFILE}")
     daemon_stop BASHD_DAEMON &
     daemon_expect pre_stop
     daemon_expect post_stop
-    wait
+    wait $!
     assert_false daemon_running BASHD_DAEMON
     assert_false daemon_status -q BASHD_DAEMON
     assert_not_exists ${BASHD_PIDFILE}
+
+    # Optionally delete the queue directory
+    if [[ ${delete} -eq 1 ]]; then
+        rm --recursive --force --one-file-system "${BASHD_QUEUE}"
+    fi
 }
 
 bashd_run()
@@ -56,7 +64,7 @@ bashd_run()
     local tmpdir=$(mktemp -d ${BASHD_QUEUE}/bashd-XXXXXX)
 
     einfo "${tmpdir} :: Starting ${BASHPID} (${cmdline})"
-    printf "cmdline=${cmdline}\ntimeout=${timeout}" > "${tmpdir}/options"
+    printf "cmdline=${cmdline}\ntimeout=${timeout}\n" > "${tmpdir}/options"
 
     # Wait for 'rc' to show up indicating the command finished
     while true; do
@@ -235,4 +243,70 @@ ETEST_bashd_stress()
         done
         unset pids
     done
+}
+
+# Verify orphaned jobs are killed off when bashd restarts
+ETEST_bashd_orphaned_jobs()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    # Start a long running task then stop bashd
+    bashd_run "sleep infinity" $(sigexitcode SIGKILL) "_" "_" &
+    bashd_stop -d=0
+ 
+    # Start bashd and ensure the job is killed
+    bashd_start
+}
+
+# Verify if a job is queued up while bashd is stopped and it's later started
+# that the job is completed as normal.
+ETEST_bashd_job_during_crash()
+{
+    # Start bashd to ensure queue is created. Then stop it to simulate a crash.
+    bashd_start
+    trap_add bashd_stop
+    bashd_stop -d=0
+
+    # Create a job while bashd is not running but background it so we can move on
+    # and startup bashd again.
+    assert_not_exists stamp
+    bashd_run "touch stamp" &
+    local pid=$!
+
+    # Start up bashd again as normal
+    bashd_start
+
+    # Wait for background process to complete
+    wait ${pid}
+    assert_eq 0 $?
+
+    # Verify created file
+    assert_exists stamp
+}
+
+# Verify jobs are auto purged after threshold if they are not reaped by the caller
+ETEST_bashd_purge()
+{
+    # Update pack settings for the daemon so it will use a very short purge threshold
+    # of 1 second
+    pack_set BASHD_DAEMON cmdline="${ETEST_TOPDIR}/bashd -q=${BASHD_QUEUE} -p=1s"
+    bashd_start
+    trap_add bashd_stop
+
+    # Create a job and ensure it's directory structure stays queued
+    bashd_run "touch f1"
+    sleep 1s
+    assert_exists f1
+    assert_eq 2 "$(find ${BASHD_QUEUE} -type d | wc -l)"
+    local jobdir="${BASHD_QUEUE}/$(ls ${BASHD_QUEUE})"
+    einfo "Found $(lval jobdir)"
+
+    # Forcibly update the time on all the files to be a day older than reality
+    # to ensure they get prunned.
+    find "${jobdir}" -exec touch --date="2 days ago" {} \;
+
+    # Create dummy file inside watched directory just to force it to clean up the job
+    touch "${BASHD_QUEUE}/wat"
+    eretry -T=5s assert_not_exists "${jobdir}"
 }
