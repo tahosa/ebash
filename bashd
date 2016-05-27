@@ -76,7 +76,7 @@ handle_job()
     #       a fresh instance of bash.
     local prefix=""
     [[ -n ${timeout} ]] && prefix="timeout ${timeout}"
-    setsid --wait ${prefix} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
+    setsid ${prefix} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
     
     echo "${rc}" >"${job}/rc"
     einfo "${job} :: Complete ${BASHPID} $(lval cmdline timeout rc) stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
