@@ -8,6 +8,7 @@ source ${ETEST_TOPDIR}/unittest/daemon_expect.sh
 
 BASHD_PIDFILE=$(readlink -m bashd-$$.pid)
 BASHD_QUEUE="/var/run/bashd/$$"
+BASHD_PID=
 
 daemon_init BASHD_DAEMON                              \
     "${DAEMON_EXPECT[@]}"                             \
@@ -33,6 +34,9 @@ bashd_start()
     assert process_running $(cat ${BASHD_PIDFILE})
     assert daemon_running BASHD_DAEMON
     assert daemon_status  BASHD_DAEMON
+
+    # Store the PID for use in various tests
+    BASHD_PID=$(cat "${BASHD_PIDFILE}")
 }
 
 bashd_stop()
@@ -41,7 +45,6 @@ bashd_stop()
     local delete=$(opt_get d 1)
 
     # Now stop it and verify proper shutdown
-    local pid=$(cat "${BASHD_PIDFILE}")
     daemon_stop BASHD_DAEMON &
     daemon_expect pre_stop
     daemon_expect post_stop
@@ -64,7 +67,7 @@ bashd_run()
     local tmpdir=$(mktemp -d ${BASHD_QUEUE}/bashd-XXXXXX)
 
     einfo "${tmpdir} :: Starting ${BASHPID} (${cmdline})"
-    printf "cmdline=${cmdline}\ntimeout=${timeout}\n" > "${tmpdir}/options"
+    printf "cmdline=%s\ntimeout=%s\n" "${cmdline}" "${timeout}" > "${tmpdir}/options"
 
     # Wait for 'rc' to show up indicating the command finished
     while true; do
@@ -211,7 +214,11 @@ ETEST_bashd_signals()
         # bashd must still be running
         assert process_running "${pid}"
 
+        # Send signal to ourselves and make sure bashd stays running. Then more aggressively
+        # send that same signal to ALL processes we are allowed to send it to (e.g. via kill -signal 0)
+        # and ensure bashd stays running.
         bashd_run "ulimit -c 0; kill -${signal} \${BASHPID}" "$(sigexitcode ${signal})" "_" "_"
+        bashd_run "ulimit -c 0; kill -${signal} 0"           "$(sigexitcode ${signal})" "_" "_"
 
         # Ensure bashd is still running
         assert process_running "${pid}"
@@ -265,7 +272,6 @@ ETEST_bashd_command_during_crash()
 {
     # Start bashd to ensure queue is created. Then stop it to simulate a crash.
     bashd_start
-    trap_add bashd_stop
     bashd_stop -d=0
 
     # Create a command while bashd is not running but background it so we can move on
@@ -276,6 +282,7 @@ ETEST_bashd_command_during_crash()
 
     # Start up bashd again as normal
     bashd_start
+    trap_add bashd_stop
 
     # Wait for background process to complete
     wait ${pid}
@@ -302,11 +309,51 @@ ETEST_bashd_purge()
     local entry="${BASHD_QUEUE}/$(ls ${BASHD_QUEUE})"
     einfo "Found $(lval entry)"
 
+    # Create some other stuff beneath this directory to ensure it gets purged.
+    mkdir ${entry}/junk
+    touch ${entry}/junk/{f1,f2,f3,f4}
+
+    # Make sure purging takes care of bind mounts properly.
+    mkdir foo ${entry}/foo
+    touch foo/{f1,f2,f3,f4}
+    ebindmount foo ${entry}/foo
+
     # Forcibly update the time on all the files to be a day older than reality
     # to ensure they get prunned.
-    find "${entry}" -exec touch --date="2 days ago" {} \;
+    find "${entry}" -exec touch --date="1 day ago" {} \;
 
     # Create dummy file inside watched directory just to force it to clean up the command
     touch "${BASHD_QUEUE}/wat"
     eretry -T=5s assert_not_exists "${entry}"
+}
+
+ETEST_bashd_multiline_monster_output()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    einfo "Generating input"
+    dmesg > input.txt
+    einfo "Num lines=$(cat input.txt | wc -l)"
+
+    # Dispatch bashd command to cat massive output and ensure it matches
+    bashd_run "cat input.txt" "0" "$(cat input.txt)"
+}
+
+ETEST_variable_expansion()
+{
+    bashd_start
+    trap_add bashd_stop
+
+    bashd_run "echo -n \$\$" "0" "_"
+    
+    # We don't know what the PID will be but make sure it is not the same as bashd's pid and not
+    # the same as the subshell bashd created to run the job otherwise it got expanded too early.
+    local entry="${BASHD_QUEUE}/$(ls ${BASHD_QUEUE})"
+    local pid=$(cat ${entry}/pid)
+    local stdout=$(cat ${entry}/stdout)
+    einfo "Found $(lval entry pid stdout)"
+    
+    assert_ne "${BASHD_PID}" "${stdout}"
+    assert_ne "${pid}"       "${stdout}"
 }

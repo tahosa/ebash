@@ -65,20 +65,19 @@ handle_job()
     local timeout=$(grep -Po 'timeout=\K(.*)' ${job}/options || true)
     einfo "${job} :: Starting ${BASHPID} $(lval cmdline timeout)"
 
-    # Launch bash with restricted environment to reduce changes of environmental blead over. Specifically:
-    # --noprofile    Do not read either the system-wide startup file /etc/profile or any of the personal initialization file
-    # --norc         Do not read/execute system wide initialization file and personal initialization file ~/.bashrc
-    # -c <cmd>       Execute commands in string.
+    # Launch brand new session to run the requested command in. It's very important we use setsid here instead of
+    # just running the command directly because this ensures the command is run in its own process group and session.
+    # This is critical because it guarantees any signals received by that process group stop at that process group and
+    # do not percolate up to our long-running bashd process. Otherwise a simple "kill 0" would bring down bashd.
     #
     # NOTE: This code purposefully diables fatal error handling by the "&& rc=0 || rc=$?" idiom. This is because we
     #       do not want a failure in this command to cause bashd itself to exit. Moreover, we don't care about any
     #       set -e error handling or traps since we specifically want a pristine environment and are thus launching
     #       a fresh instance of bash.
-    if [[ -n ${timeout} ]]; then
-        timeout ${timeout} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
-    else
-        bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
-    fi
+    local prefix=""
+    [[ -n ${timeout} ]] && prefix="timeout ${timeout}"
+    setsid --wait ${prefix} bash --noprofile --norc -c "exec 1>${job}/stdout 2>${job}/stderr; ${cmdline}" && rc=0 || rc=$?
+    
     echo "${rc}" >"${job}/rc"
     einfo "${job} :: Complete ${BASHPID} $(lval cmdline timeout rc) stdout=\"$(cat ${job}/stdout)\" stderr=\"$(cat ${job}/stderr)\""
 }
@@ -92,8 +91,10 @@ kill_job()
     local pid=$(cat ${job}/pid || true)
     local delete=$(opt_get d 0)
 
+    # Display what is being killed along with limited context from known files.
+    # This is best effort so don't allow a tail failure to cause us to crash.
     ewarn "${job} :: ${msg} ${pid} $(lval delete)"
-    tail -n +1 -- "${job}"/*
+    tail "${job}"/{options,rc,stdout,stderr} || true
 
     if process_running ${pid}; then
         ewarn "Killing runing $(lval pid)"
@@ -104,6 +105,7 @@ kill_job()
     # Optionally remove the directory. Otherwise record failure indicating we killed the job
     if [[ ${delete} -eq 1 ]]; then
         edebug "Deleting ${job}"
+        eunmount_recursive "${job}"
         rm --recursive --force --one-file-system "${job}"
     else
         edebug "Marking ${job} as failed"
@@ -179,7 +181,7 @@ while read entry; do
     # Purge all jobs older than specified purge interval. Any active jobs older than purge interval are
     # explicitly killed. Find doesn't support an 'older' flag but you can achieve the same effect with
     # the '-not -newer' idiom.
-    for job in $(find "${queue}" -type d -maxdepth 1 -not -newermt ${purge}); do
+    for job in $(find "${queue}" -type d -maxdepth 1 -not -newermt "${purge}"); do
         kill_job -d=1 "Purging" "${job}"
     done
 done
