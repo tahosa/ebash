@@ -55,6 +55,7 @@ bashd_stop()
 
     # Optionally delete the queue directory
     if [[ ${delete} -eq 1 ]]; then
+        eunmount_recursive "${BASHD_QUEUE}"
         rm --recursive --force --one-file-system "${BASHD_QUEUE}"
     fi
 }
