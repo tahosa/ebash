@@ -202,9 +202,9 @@ ETEST_bashd_signals()
     local signal
     for signal in ${DIE_SIGNALS[@]}; do
 
-        # Skip TTY_SIGNALS since bashutils interprets these specially and 
+        # Skip SIGPIPE and TTY_SIGNALS since bashutils interprets these specially and 
         # causes the process to exit with 0.
-        if array_contains TTY_SIGNALS "${signal}"; then
+        if [[ ${signal} == "SIGPIPE" ]] || array_contains TTY_SIGNALS "${signal}"; then
             einfo "Skipping TTY $(lval signal TTY_SIGNALS)"
             continue
         fi
