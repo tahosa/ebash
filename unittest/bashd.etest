@@ -214,10 +214,8 @@ ETEST_bashd_signals()
         # bashd must still be running
         assert process_running "${pid}"
 
-        # Send signal to ourselves and make sure bashd stays running. Then more aggressively
-        # send that same signal to ALL processes we are allowed to send it to (e.g. via kill -signal 0)
+        # Send signal to all processes that we're allowed to send it to (e.g. via kill -signal 0)
         # and ensure bashd stays running.
-        bashd_run "ulimit -c 0; kill -${signal} \${BASHPID}" "$(sigexitcode ${signal})" "_" "_"
         bashd_run "ulimit -c 0; kill -${signal} 0"           "$(sigexitcode ${signal})" "_" "_"
 
         # Ensure bashd is still running
