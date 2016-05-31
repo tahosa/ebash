@@ -338,7 +338,7 @@ ETEST_bashd_multiline_monster_output()
     bashd_run "cat input.txt" "0" "$(cat input.txt)"
 }
 
-ETEST_variable_expansion()
+ETEST_bashd_variable_expansion()
 {
     bashd_start
     trap_add bashd_stop
