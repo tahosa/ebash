@@ -294,9 +294,6 @@ ETEST_bashd_command_during_crash()
 # Verify commands are auto purged after threshold if they are not reaped by the caller
 ETEST_bashd_purge()
 {
-    # Update pack settings for the daemon so it will use a very short purge threshold
-    # of 1 second
-    pack_set BASHD_DAEMON cmdline="${ETEST_TOPDIR}/bashd -q=${BASHD_QUEUE} -p=1s"
     bashd_start
     trap_add bashd_stop
 
@@ -323,7 +320,7 @@ ETEST_bashd_purge()
 
     # Create dummy file inside watched directory just to force it to clean up the command
     touch "${BASHD_QUEUE}/wat"
-    eretry -T=5s assert_not_exists "${entry}"
+    eretry -T=30s -d=1s assert_not_exists "${entry}"
 }
 
 ETEST_bashd_multiline_monster_output()
