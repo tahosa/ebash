@@ -745,7 +745,7 @@ eprogress()
                     ewarn "B Not deleting $(lval delete file)" 2>/dev/tty
                 fi
 
-                return 0
+                exit 0
             fi
 
             ecolor restore_cursor
