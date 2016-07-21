@@ -678,10 +678,14 @@ eprogress()
                 printf "%s " "$(<${file})" >&2
             fi
 
+            ewarn A
+
             while true; do
                 echo -n "." >&2
                 sleep 1
             done
+
+            ewarn B
 
             # Delete file if requested
             if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
@@ -691,7 +695,8 @@ eprogress()
                 ewarn "A Not deleting $(lval delete file)"
             fi
 
-            return 0
+            ewarn C
+            exit 0
         fi
 
         # Sentinal for breaking out of the loop on signal from eprogress_kill
