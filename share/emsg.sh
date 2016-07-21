@@ -672,6 +672,11 @@ eprogress()
             trap_add "rm --force \"${file}\""
         fi
 
+        # Sentinal for breaking out of the loop on signal from eprogress_kill
+        local done=0
+        trap "done=1" ${DIE_SIGNALS[@]}
+
+
         # Automatically detect if we should use ticker based on if we are interactive or not.
         if ! einteractive; then
 
@@ -694,10 +699,6 @@ eprogress()
             ewarn C
             exit 0
         fi
-
-        # Sentinal for breaking out of the loop on signal from eprogress_kill
-        local done=0
-        trap "done=1" ${DIE_SIGNALS[@]}
 
         "${style}" -n "$*"
 
