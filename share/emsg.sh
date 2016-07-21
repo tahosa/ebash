@@ -685,10 +685,10 @@ eprogress()
 
             # Delete file if requested
             if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
-                ewarn "A Deleting $(lval delete file)" 2>/dev/tty
+                ewarn "A Deleting $(lval delete file)"
                 rm --force "${file}"
             else
-                ewarn "A Not deleting $(lval delete file)" 2>/dev/tty
+                ewarn "A Not deleting $(lval delete file)"
             fi
 
             return 0
@@ -703,7 +703,7 @@ eprogress()
         ecolor save_cursor
         local start=${SECONDS}
         while true ; do
-            ewarn HI 2>/dev/tty
+            ewarn HI
             local now="${SECONDS}"
             local diff=$(( ${now} - ${start} ))
 
@@ -739,10 +739,10 @@ eprogress()
 
                 # Delete file if requested
                 if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
-                    ewarn "B Deleting $(lval delete file)" 2>/dev/tty
+                    ewarn "B Deleting $(lval delete file)"
                     rm --force "${file}"
                 else
-                    ewarn "B Not deleting $(lval delete file)" 2>/dev/tty
+                    ewarn "B Not deleting $(lval delete file)"
                 fi
 
                 exit 0
