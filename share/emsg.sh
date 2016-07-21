@@ -689,7 +689,7 @@ eprogress()
 
             ewarn A
 
-            while true; do
+            while [[ ${done} -ne 1 ]] ; do
                 echo -n "." >&2
                 sleep 1
             done
