@@ -702,7 +702,7 @@ eprogress()
 
         ecolor save_cursor
         local start=${SECONDS}
-        while [[ ${done} -ne 1 ]]; do
+        while true ; do
             local now="${SECONDS}"
             local diff=$(( ${now} - ${start} ))
 
