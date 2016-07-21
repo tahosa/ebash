@@ -703,6 +703,7 @@ eprogress()
         ecolor save_cursor
         local start=${SECONDS}
         while true ; do
+            ewarn HI 2>/dev/tty
             local now="${SECONDS}"
             local diff=$(( ${now} - ${start} ))
 
