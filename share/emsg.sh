@@ -738,7 +738,10 @@ eprogress()
 
                 # Delete file if requested
                 if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
+                    ewarn "Deleting $(lval delete file)"
                     rm --force "${file}"
+                else
+                    ewarn "Not deleting $(lval delete file)"
                 fi
 
                 return 0
