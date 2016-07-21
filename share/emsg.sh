@@ -668,6 +668,10 @@ eprogress()
         # Don't produce any errors when tools here catch a signal.  That's what we expect to happen
         nodie_on_error
 
+        if [[ -n ${file} && ${delete} -eq 1 ]] ; then
+            trap_add "rm --force \"${file}\""
+        fi
+
         # Automatically detect if we should use ticker based on if we are interactive or not.
         if ! einteractive; then
 
@@ -686,14 +690,6 @@ eprogress()
             done
 
             ewarn B
-
-            # Delete file if requested
-            if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
-                ewarn "A Deleting $(lval delete file)"
-                rm --force "${file}"
-            else
-                ewarn "A Not deleting $(lval delete file)"
-            fi
 
             ewarn C
             exit 0
@@ -742,13 +738,13 @@ eprogress()
                 ecolor move_left
                 echo -n " "
 
-                # Delete file if requested
-                if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
-                    ewarn "B Deleting $(lval delete file)"
-                    rm --force "${file}"
-                else
-                    ewarn "B Not deleting $(lval delete file)"
-                fi
+                ## Delete file if requested
+                #if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
+                #    ewarn "B Deleting $(lval delete file)"
+                #    rm --force "${file}"
+                #else
+                #    ewarn "B Not deleting $(lval delete file)"
+                #fi
 
                 exit 0
             fi
