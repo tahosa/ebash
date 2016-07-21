@@ -685,10 +685,10 @@ eprogress()
 
             # Delete file if requested
             if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
-                ewarn "Deleting $(lval delete file)"
+                ewarn "A Deleting $(lval delete file)" 2>/dev/tty
                 rm --force "${file}"
             else
-                ewarn "Not deleting $(lval delete file)"
+                ewarn "A Not deleting $(lval delete file)" 2>/dev/tty
             fi
 
             return 0
@@ -738,10 +738,10 @@ eprogress()
 
                 # Delete file if requested
                 if [[ -n ${file} && -r ${file} && ${delete} -eq 1 ]] ; then
-                    ewarn "Deleting $(lval delete file)"
+                    ewarn "B Deleting $(lval delete file)" 2>/dev/tty
                     rm --force "${file}"
                 else
-                    ewarn "Not deleting $(lval delete file)"
+                    ewarn "B Not deleting $(lval delete file)" 2>/dev/tty
                 fi
 
                 return 0
