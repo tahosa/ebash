@@ -2375,21 +2375,28 @@ emount_realpath()
 {
     $(declare_args path)
     path="${path//\\040\(deleted\)/}"
-    echo -n "$(readlink -m ${path} 2>/dev/null || true)"
+
+    # Despite what readlink's manpage says, it can fail if the
+    # top-level path doesn't exist. In that case we'd still want
+    # to return the original input path rather than an empty string.
+    if ! readlink -m ${path} 2>/dev/null; then
+        echo -n "${path}"
+    fi
 }
 
 # Echo the emount regex for a given path
 emount_regex()
 {
     $(declare_args path)
-    echo -n "(^| )${path}(\\\\040\\(deleted\\))* "
+    local rpath=$(emount_realpath "${path}")
+
+    echo -n "(^| )(${path}|${rpath})(\\\\040\\(deleted\\))* "
 }
 
 # Echo the number of times a given directory is mounted.
 emount_count()
 {
     $(declare_args path)
-    path=$(emount_realpath ${path})
     local num_mounts=$(grep --count --perl-regexp "$(emount_regex ${path})" /proc/mounts || true)
     echo -n ${num_mounts}
 }
@@ -2397,9 +2404,7 @@ emount_count()
 emounted()
 {
     $(declare_args path)
-    path=$(emount_realpath ${path})
     [[ -z ${path} ]] && { edebug "Unable to resolve $(lval path) to check if mounted"; return 1; }
-
     [[ $(emount_count "${path}") -gt 0 ]]
 }
 
@@ -2449,22 +2454,22 @@ eunmount()
 efindmnt()
 {
     $(declare_args path)
-    path=$(emount_realpath ${path})
 
     # First check if the requested path itself is mounted
-    emounted "${path}" && echo "${path}" || true
+    if emounted "${path}"; then
+        echo "${path}"
+    fi
 
     # Now look for anything beneath that directory
-    grep --perl-regexp "(^| )${path}[/ ]" /proc/mounts | awk '{print $2}' | sed '/^$/d' || true
+    local rpath=$(emount_realpath "${path}")
+    grep --perl-regexp "(^| )(${path}|${rpath})[/ ]" /proc/mounts | awk '{print $2}' | sed '/^$/d' || true
 }
 
 eunmount_recursive()
 {
     local mnt
     for mnt in "${@}"; do
-        local rdev=$(emount_realpath "${mnt}")
-        argcheck rdev
-
+        
         while true; do
 
             # If this path is directly mounted or anything BENEATH it is mounted then proceed
@@ -2475,7 +2480,7 @@ eunmount_recursive()
             einfo "Recursively unmounting ${mnt} (${nmatches})"
             local match
             for match in "${matches}"; do
-                eunmount "${match//${rdev}/${mnt}}"
+                eunmount "${match}"
             done
         done
     done
