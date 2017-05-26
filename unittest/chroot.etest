@@ -8,7 +8,7 @@ CHROOT=${TEST_DIR_OUTPUT}/chroot
 file_setup()
 {
     efreshdir ${CHROOT}
-    mkchroot ${CHROOT} precise oxygen bdr-jenkins amd64
+    mkchroot ${CHROOT} precise oxygen bdr-jenkins.den.solidfire.net amd64
 }
 
 file_teardown()
