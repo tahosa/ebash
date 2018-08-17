@@ -16,7 +16,7 @@ emount_realpath()
     # Despite what readlink's manpage says, it can fail if the
     # top-level path doesn't exist. In that case we'd still want
     # to return the original input path rather than an empty string.
-    if ! readlink -m ${path} 2>/dev/null; then
+    if ! readlink -m "${path}" 2>/dev/null; then
         echo -n "${path}"
     fi
 }
@@ -25,16 +25,21 @@ opt_usage emount_regex "Echo the emount regex for a given path"
 emount_regex()
 {
     $(opt_parse path)
+    # If there is a '\' in the path the mount translates this to the octal value of
+    # \134. Therefor need to make sure that is updated to the correct search pattern
+    # in the path.
+    path=$(echo "${path}" | sed -e 's/\\/\\134/g')
     local rpath=$(emount_realpath "${path}")
 
-    echo -n "(^| )(${path}|${rpath})(\\\\040\\(deleted\\))* "
+    echo -n "(^| )(\Q${path}\E|\Q${rpath}\E)(\\\\040\\(deleted\\))* "
 }
 
 opt_usage emount_count "Echo the number of times a given directory is mounted."
 emount_count()
 {
     $(opt_parse path)
-    local num_mounts=$(list_mounts | grep --count --perl-regexp "$(emount_regex ${path})" || true)
+    local eregex=$(emount_regex "${path}")
+    local num_mounts=$(list_mounts | grep --count --perl-regexp "${eregex}" || true)
     echo -n ${num_mounts}
 }
 
@@ -42,8 +47,8 @@ opt_usage emount_type "Get the mount type of a given mount point."
 emount_type()
 {
     $(opt_parse path)
-    path=$(emount_realpath ${path})
-    list_mounts | grep --perl-regexp "$(emount_regex ${path})" | sort --unique | awk '{print $3}'
+    local eregex=$(emount_regex "${path}")
+    list_mounts | grep --perl-regexp "${eregex}" | sort --unique | awk '{print $3}'
 }
 
 emounted()
@@ -253,7 +258,7 @@ eunmount_internal()
         # Skip if not mounted.
         emounted "${mnt}" || continue
 
-        local mnt_type=$(emount_type ${mnt})
+        local mnt_type=$(emount_type "${mnt}")
         [[ ${verbose} -eq 1 ]] && einfo "Unmounting ${mnt} (${mnt_type})"
         
         # OVERLAYFS: Redirect unmount operation to overlayfs_unmount so all layers unmounted

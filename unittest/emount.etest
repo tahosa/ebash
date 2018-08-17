@@ -297,3 +297,29 @@ ETEST_ebindmount_into_shadow_recursive_merge()
     assert_eq "src2" "$(cat dest/foo/bar/file1)"
     assert_eq "src2" "$(cat dest/foo/bar/beta)"
 }
+
+# Verify that emounted finds mount points correctly
+ETEST_emounted()
+{
+  rm -f /tmp/x.out
+  mkdir src1 dest
+  ebindmount src1 dest
+  assert_true emounted dest
+
+  mntpoints="dest "
+  cnt=2
+  #for specialchar in . ^ $ + \( \) \[ \] \{ \} \\ \| \? \*
+  for specialchar in . ^ $ + \( \) \? \[ \] \{ \} \| \* \\
+  do
+    srcd="src${cnt}"
+    destd="dest${specialchar}ination"
+    einfo "Testing ${destd}"
+    mkdir "${srcd}" "${destd}"
+    ebindmount "${srcd}" "${destd}"
+    assert_true emounted "${destd}"
+    eunmount "${destd}"
+    ((cnt++))
+  done
+
+  eunmount dest
+}
